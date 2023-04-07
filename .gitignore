@@ -1,0 +1,9 @@
+data
+data/
+__pycache__
+.idea
+
+# Ignore all files with this format
+*.png
+*.npz
+*.npy
