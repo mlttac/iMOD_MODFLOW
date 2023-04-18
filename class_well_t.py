@@ -53,8 +53,7 @@ class DatasetGenerator:
         
         self.n_wells = 1
         self.well_layer = [1]
-        self.well_row = [16 ]
-        self.well_column = [16]
+
         
         # Node properties
         self.icelltype = xr.DataArray([1], {"layer": self.layer}, ("layer",))
@@ -105,11 +104,22 @@ class DatasetGenerator:
             # generate data
             self.dataset_branch = []
             self.dataset_target = []
+            self.well_locs = []
             
             for i in range(self.n_samples):
                 if i%100 == 0:
                     print("\n\Generating sample: " + str(i) + "\n=============================================================================") 
     
+    
+    
+                # self.well_row = [16 ]
+                # self.well_column = [16]
+                self.well_row = random.sample(range(2, self.nrow-2), self.n_wells)
+                self.well_column = random.sample(range(2, self.ncol-2), self.n_wells)
+
+                loc_well = np.zeros((self.nrow, self.ncol))
+                loc_well[self.well_row, self.well_column] = 1
+                
                 # Generate random variable
                 # # well rate changing with time
                 min_rate = -30
@@ -132,16 +142,18 @@ class DatasetGenerator:
                     # Add 0 to the list the required number of times
                     well_rate += [p_rate] * times_to_add
                     
-                    # Generate sample with fixed and random variables
-                    head = self.run_imod(well_rate)
-                    
-                    self.dataset_branch.append(np.array(well_rate))
-                    # Append sample to dataset
-                    self.dataset_target.append(head)
+                # Generate sample with fixed and random variables
+                head = self.run_imod(well_rate)
+                
+                self.dataset_branch.append(np.array(well_rate))
+                # Append sample to dataset
+                self.dataset_target.append(head)
+                
+                self.well_locs.append(loc_well)
                     
             self.dataset_branch = np.array(self.dataset_branch)
-            
-            
+            self.well_locs = np.array(self.well_locs)
+
             # check a sample
             # self.dataset_target[0].isel(layer=0, time=5).plot.contourf()
             
@@ -159,10 +171,11 @@ class DatasetGenerator:
             y_stacked = y_stacked.reshape(self.nrow,self.ncol,len(tsteps),3)
             self.trunk   = np.repeat(y_stacked[np.newaxis, :, :, :], self.n_samples, axis=0)
             
-
-            return self.dataset_branch[:split_sample], self.trunk[:split_sample], self.dataset_target[:split_sample]
+            # In this case, the inputs are multi-modal: Pumping profile (time sequence) + Well Location (Image)
+            # Output are the frames of Head in time
+            return self.dataset_branch[:split_sample], self.well_locs[:split_sample], self.dataset_target[:split_sample]
         else:
-            return self.dataset_branch[split_sample:], self.trunk[split_sample:], self.dataset_target[split_sample:]
+            return self.dataset_branch[split_sample:], self.well_locs[split_sample:], self.dataset_target[split_sample:]
     
     
     def run_imod(self, well_rate, delete_f = True):
@@ -260,7 +273,7 @@ for modeldir in dataset_generator.modeldirs:
      shutil.rmtree(modeldir)    
         
 
-outputName = "well_t-1000.npz"
+outputName = "well_t_loc-1000.npz"
 
 np.savez_compressed(outputName, U_train=U_train, Y_train=Y_train, s_train=s_train, 
                     U_test=U_test, Y_test=Y_test, s_test=s_test)

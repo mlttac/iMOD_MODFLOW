@@ -20,12 +20,13 @@ class DatasetGenerator:
     def __init__(self):
         # self.n_samples = n_samples
         self.fixed_seed = False
+        self.deeponet_dataset = False
         self.modeldirs = []
         # Define fixed variables
 
         self.nrow = 128 
         self.ncol = 128
-        self.days_tot = 100
+        self.days_tot = 10
         
         
         self.nlay = 1
@@ -51,9 +52,9 @@ class DatasetGenerator:
         # Constant head
         constant_head = xr.full_like(self.idomain, np.nan, dtype=float).sel(layer=[1])
         constant_head[..., 0] = 0.0
-        constant_head[..., -1] = 0.0
-        constant_head[:, 0,:] = 0.0 
-        constant_head[:, -1,:] = 0.0 
+        # constant_head[..., -1] = -2.0
+        # constant_head[:, 0,:] = 0.0 
+        # constant_head[:, -1,:] = 0.0 
         self.constant_head = constant_head
         
         
@@ -81,7 +82,7 @@ class DatasetGenerator:
         
 
         for i in range(self.days_tot-1):
-            self.times.append(self.times[-1] + np.timedelta64(1, "D"))
+            self.times.append(self.times[-1] + np.timedelta64(100, "D"))
         
         self.n_times = len(self.times) - 1
         
@@ -96,7 +97,7 @@ class DatasetGenerator:
                 min_rate = -30
                 max_rate = 0
                 
-                segment_length = 15
+                segment_length = 1
                 # Create an empty list to hold the piecewise function
                 well_rate = []
                 
@@ -122,25 +123,31 @@ class DatasetGenerator:
         split_sample = int(self.n_samples * 0.8)
 
         # generate data
-        self.dataset_branch = []
+        self.dataset_input = []
         self.dataset_target = []
+        self.time_series_input = []
         
         for i in range(self.n_samples):
             if i%100 == 0:
-                print("\n\Generating sample: " + str(i) + "\n=============================================================================") 
+                print("\n Generating sample: " + str(i) + "\n=============================================================================") 
 
     
             K  = np.full(shape = (self.nlay, self.nrow,self.ncol), fill_value = 0.5 )
             
             K = rf.create_Krf(alpha=-4., discrete = True, minK = self.k_min , maxK = self.k_max,size = self.nrow, fixed_seed = self.fixed_seed ) 
             K = K.reshape(self.nlay, self.nrow,self.ncol)
+
+            # K  = np.full(shape = (self.nlay, self.nrow,self.ncol), fill_value = 0.05 )
+            
             self.K = K
             self.k = xr.DataArray(self.K, coords=self.coords, dims=self.dims) # Horizontal hydraulic conductivity ($m/day$)
+            
+
             self.k33 = xr.DataArray([2.0e-3], {"layer": self.layer}, ("layer",))
             if self.fixed_seed:
-                random.seed(10)
+                random.seed(11)
             # self.n_wells = random.randint(1, 10) #It includes the last point 
-            self.n_wells = 3 #It includes the last point 
+            self.n_wells = 1 #It includes the last point 
 
             self.well_layer = self.n_wells * [1]
 
@@ -148,37 +155,63 @@ class DatasetGenerator:
             self.well_row = random.sample(range(1, self.nrow-1), self.n_wells)
             self.well_column = random.sample(range(1, self.ncol-1), self.n_wells)
 
+
+            # self.well_row = [74, 74, 55]
+            # self.well_column = [62, 74, 2]
             # Initialize the array with zeros
             arr = np.zeros((self.nrow, self.ncol , self.days_tot))
-
+            well_pos = np.zeros((self.nrow, self.ncol, 1))
+                                
             well_rates = []
             for i in range(self.n_wells):
                 # create rate function
                 well_rate = self.well_rate_fun()
-                well_rates.append(well_rate)
+                
                 #  get coordinates of that well
                 wx = self.well_row[i]
                 wy = self.well_column[i]
+                
+                # if i ==0:
+                #     well_rate = [-15.] * 10 
+                # if i ==1:
+                #     well_rate = [-13.] * 10 
+                # if i ==2:
+                #     well_rate = [-7.] * 10              
+
+                # nv = 5
+                # if i ==0:
+                #     well_rate[-nv:] = [-15.] * nv 
+                # if i ==1:
+                #     well_rate[-nv:] = [-13.] * nv
+                # if i ==2:
+                #     well_rate[-nv:] = [-7.] * nv                              
+
                 #  assign rate to the well
                 arr[wx, wy, :] = well_rate
+                well_rates.append(well_rate)
+                # plt.plot(well_rate)
+                
+                well_pos[wx, wy,:] = 1
                 
             # well_rate_allT = [[x, y, z] for x,y,z in zip(well_rate_1,well_rate_2, well_rate_3)]
             well_rate_allT = [list(values) for values in zip(*well_rates)]
+            # print(well_rate_allT[-1])
+            
             # Generate sample with fixed and random variables
             head = self.run_imod(well_rate_allT)
             # Append sample to dataset
             self.dataset_target.append(head)
 
             self.K = self.K.reshape(self.nrow, self.ncol, 1)
-            self.dataset_branch.append(np.expand_dims(np.concatenate((self.K, np.array(arr)), axis= 2), axis =-1))
+            # self.dataset_input.append(np.expand_dims(np.concatenate((self.K, np.array(arr)), axis= 2), axis =-1))
             
-            # self.dataset_branch.append(np.array(arr))
+            self.dataset_input.append(np.expand_dims(np.concatenate((self.K, np.array(well_pos)), axis= 2), axis =-1))
 
-            # self.dataset_branch.append(np.array(well_rate_allT))
+            self.time_series_input.append(np.array(well_rate_allT))
 
             
-        
-        self.dataset_branch = np.array(self.dataset_branch)
+        self.time_series_input = np.array(self.time_series_input)
+        self.dataset_input = np.array(self.dataset_input)
                     
         # check a sample
         # self.dataset_target[0].isel(layer=0, time=5).plot.contourf()
@@ -189,16 +222,17 @@ class DatasetGenerator:
         self.dataset_target = self.dataset_target.swapaxes(1,-1) #put time as last coordinate
         self.dataset_target = self.dataset_target.swapaxes(1,2) #exchange x and y
 
-        x_ = np.linspace(0., 1., self.nrow)
-        y_ = np.linspace(0., 1., self.ncol)
-        tsteps = np.linspace(0., 1., self.days_tot)
-        XX, YY, TT = np.meshgrid(x_, y_, tsteps, indexing='ij')
-        y_stacked = np.hstack((XX.flatten()[:,None], YY.flatten()[:,None], TT.flatten()[:,None]))
-        y_stacked = y_stacked.reshape(self.nrow,self.ncol,len(tsteps),3)
-        self.trunk   = np.repeat(y_stacked[np.newaxis, :, :, :], self.n_samples, axis=0)
+        if self.deeponet_dataset:
+            x_ = np.linspace(0., 1., self.nrow)
+            y_ = np.linspace(0., 1., self.ncol)
+            tsteps = np.linspace(0., 1., self.days_tot)
+            XX, YY, TT = np.meshgrid(x_, y_, tsteps, indexing='ij')
+            y_stacked = np.hstack((XX.flatten()[:,None], YY.flatten()[:,None], TT.flatten()[:,None]))
+            y_stacked = y_stacked.reshape(self.nrow,self.ncol,len(tsteps),-1)
+            self.trunk   = np.repeat(y_stacked[np.newaxis, :, :, :], self.n_samples, axis=0)
         
 
-        return self.dataset_branch, self.trunk, self.dataset_target
+        return self.dataset_input, self.time_series_input, self.dataset_target
 
     
     
@@ -290,23 +324,23 @@ class DatasetGenerator:
 dataset_generator = DatasetGenerator()
 
 # Generate train set
-U_train, Y_train, s_train = dataset_generator.generate_set(n_samples=5000)
+U_train, Y_train, s_train = dataset_generator.generate_set(n_samples=1000)
 
 # dataset_generator = DatasetGenerator(n_samples=200)
 
 # # Generate test set
-U_test, Y_test, s_test = dataset_generator.generate_set(n_samples=1000)
+U_test, Y_test, s_test = dataset_generator.generate_set(n_samples=200)
 
 plot_example = False
 
 if plot_example == True:
     import matplotlib.pyplot as plt
     from matplotlib.colors import BoundaryNorm, ListedColormap
-    for n_example in range(3):
+    for n_example in range(2):
     
         f1 = U_train[n_example,:,:,1,0]
         f2 = U_train[n_example,:,:,0,0] #permeability
-        f3 =  s_train[n_example,:,:,0]
+        f3 =  s_train[n_example,:,:,-1]
         
         # Create a figure with two subplots
         fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(12, 5))
@@ -349,21 +383,21 @@ if plot_example == True:
         plt.show()
     
 
-        nonzero_indices = np.argwhere(U_train[n_example,:,:, -1] != 0)  # Find indices of non-zero elements in last axis
-        x, y, _ = nonzero_indices.T  # Separate indices into x and y coordinates
-        values = U_train[n_example, nonzero_indices[:, 0], nonzero_indices[:, 1], :]  # Extract non-zero values
-        for i in range(len(values)):
-            plt.plot(values[i])
-        plt.show()
+        # nonzero_indices = np.argwhere(U_train[n_example,:,:, -1] != 0)  # Find indices of non-zero elements in last axis
+        # x, y, _ = nonzero_indices.T  # Separate indices into x and y coordinates
+        # values = U_train[n_example, nonzero_indices[:, 0], nonzero_indices[:, 1], :]  # Extract non-zero values
+        # for i in range(len(values)):
+        #     plt.plot(values[i])
+        # plt.show()
         
 
         fig, axs = plt.subplots(nrows=2, ncols=5)
         
         # Iterate over subplots and display a frame of the array in each subplot
         for i, ax in enumerate(axs.flat):
-            frame = s_train[n_example,:,:, i*10]  # Extract frame from array
+            frame = s_train[n_example,:,:, i]  # Extract frame from array
             ax.imshow(frame)
-            ax.set_title(f"Frame {i* 10}")
+            ax.set_title(f"Frame {i}")
         
         plt.show()
 
@@ -384,10 +418,13 @@ for modeldir in dataset_generator.modeldirs:
 
 common_string = '.npy'
 
-np.save(os.path.join("data\video_prediction", 'X_train' + common_string), U_train)
-np.save(os.path.join("data\video_prediction", 'Y_train' + common_string),s_train)
-np.save(os.path.join("data\video_prediction", 'X_test' + common_string), U_test)
-np.save(os.path.join("data\video_prediction", 'Y_test' + common_string), s_test)
+np.save(os.path.join("10video_1well", 'X_train' + common_string), U_train)
+np.save(os.path.join("10video_1well", 'Y_train' + common_string),s_train)
+np.save(os.path.join("10video_1well", 'X_test' + common_string), U_test)
+np.save(os.path.join("10video_1well", 'Y_test' + common_string), s_test)
+
+np.save(os.path.join("10video_1well", 'timeseq_train' + common_string), Y_train)
+np.save(os.path.join("10video_1well", 'timeseq_test' + common_string), Y_test)
 
 
 # np.save('data/X_train.npy', U_train[:,:,:,1,:])
