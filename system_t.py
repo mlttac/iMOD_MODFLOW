@@ -50,16 +50,30 @@ class DatasetGenerator:
         constant_head[..., 0] = 0.0
 
         constant_head[..., -1] = 0.0
-        constant_head[:, 0, :] = 0.0
-        constant_head[:, -1, :] = 0.0
+        constant_head[:, 0, :] = 1.0
+        constant_head[:, -1, :] = -1.0
         self.constant_head = constant_head
 
         # Node properties
         self.icelltype = xr.DataArray([1], {"layer": self.layer}, ("layer",))
 
         # random field
-        self.k_min = 0.0001
-        self.k_max = 2.0
+        self.k_min = 0.005
+        self.k_max = 0.5
+
+
+
+        # Drainage
+        self.elevation = xr.full_like(self.idomain.sel(layer=1), np.nan, dtype=float)
+        self.conductance = xr.full_like(self.idomain.sel(layer=1), np.nan, dtype=float)
+        
+        for i in range(2, 10):
+            self.elevation[10*i, 1:100] = 99*[1] #np.concatenate(([0, 0], np.arange(2, 100-1, 1)/100))
+            self.conductance[10*i, 1:100] = 1.0
+
+        # self.elevation[50, 1:100] = np.concatenate(([0, 0], np.arange(2, 100-1, 1)))
+        # self.conductance[50, 1:100] = 1.0
+        
 
         starttime = np.datetime64("2020-01-01 00:00:00")
         # Add first steady-state
@@ -71,6 +85,18 @@ class DatasetGenerator:
             self.times.append(self.times[-1] + np.timedelta64(100, "D"))
 
         self.n_times = len(self.times) - 1
+
+        # Recharge
+        rch_rate_allT = []
+        for t in range(self.n_times):
+               self.rch_rate = random.uniform(3.0e-8, 0) #3.0e-8 # Recharge rate ($m/s$)
+               rch_rate_t = xr.full_like(self.idomain.sel(layer=1), self.rch_rate, dtype=float) 
+               rch_rate_allT.append(rch_rate_t)
+        
+        # rechanrge changing in time
+        self.rch_rate = xr.concat(rch_rate_allT, dim="time").assign_coords(time = self.times[:-1])
+
+
 
         self.transient = xr.DataArray(
             [False] + [True] * self.n_times, {"time": self.times}, ("time",)
@@ -87,8 +113,8 @@ class DatasetGenerator:
         """
 
         # Set the minimum and maximum well rate values
-        min_rate = -300
-        max_rate = 0
+        min_rate = -500
+        max_rate = -50
 
         # Define the segment length (in days)
         segment_length = 1
@@ -152,7 +178,7 @@ class DatasetGenerator:
                 random.seed(11)
     
             # Set the number of wells
-            self.n_wells = 1
+            self.n_wells = 3
     
             # Randomly select well locations (rows and columns)
             self.well_row = random.sample(range(1, self.nrow - 1), self.n_wells)
@@ -250,11 +276,22 @@ class DatasetGenerator:
             convertible=0,
         )
         gwf_model["oc"] = imod.mf6.OutputControl(save_head="all", save_budget="all")
+        
+        gwf_model["rch"] = imod.mf6.Recharge(self.rch_rate)
+
         gwf_model["wel"] = imod.mf6.WellDisStructured(
             layer=self.well_layer,
             row=self.well_row,
             column=self.well_column,
             rate=well_rate_gwf,
+            print_input=True,
+            print_flows=True,
+            save_flows=True,
+        )
+        
+        gwf_model["drn"] = imod.mf6.Drainage(
+            elevation=self.elevation,
+            conductance=self.conductance,
             print_input=True,
             print_flows=True,
             save_flows=True,
@@ -304,12 +341,12 @@ class DatasetGenerator:
 dataset_generator = DatasetGenerator()
 
 # Generate train set
-U_train, Y_train, s_train = dataset_generator.generate_dataset(n_samples=5000)
+U_train, Y_train, s_train = dataset_generator.generate_dataset(n_samples=6)
 
 # # Generate test set
-U_test, Y_test, s_test = dataset_generator.generate_dataset(n_samples=1000)
+U_test, Y_test, s_test = dataset_generator.generate_dataset(n_samples=1)
 
-plot_example = False
+plot_example = True
 
 if plot_example == True:
     import matplotlib.pyplot as plt
@@ -354,7 +391,6 @@ if plot_example == True:
         # Plot an image in the right subplot
         im = ax3.imshow(f3, cmap='afmhot')
         cset = ax3.contour(f3, cmap='Set1_r', linewidths=2) # cmap='gray'
-        levels_1 = cset.levels
         ax3.clabel(cset, inline=False, fmt='%1.2f', fontsize=10, colors = 'k')
         ax3.set_title('Output')
         cbar = fig.colorbar(im, ax=ax3)
@@ -362,12 +398,12 @@ if plot_example == True:
         plt.show()
     
 
-        nonzero_indices = np.argwhere(U_train[n_example,:,:, -1] != 0)  # Find indices of non-zero elements in last axis
-        x, y, _ = nonzero_indices.T  # Separate indices into x and y coordinates
-        values = s_train[n_example, nonzero_indices[:, 0], nonzero_indices[:, 1], :]  # Extract non-zero values
-        for i in range(len(values)):
-            plt.plot(values[i])
-        plt.show()
+        # nonzero_indices = np.argwhere(U_train[n_example,:,:, -1] != 0)  # Find indices of non-zero elements in last axis
+        # x, y, _ = nonzero_indices.T  # Separate indices into x and y coordinates
+        # values = U_train[n_example, nonzero_indices[:, 0], nonzero_indices[:, 1], :]  # Extract non-zero values
+        # for i in range(len(values)):
+        #     plt.plot(values[i])
+        # plt.show()
         
 
         fig, axs = plt.subplots(nrows=2, ncols=5)
@@ -376,8 +412,6 @@ if plot_example == True:
         for i, ax in enumerate(axs.flat):
             frame = s_train[n_example,:,:, i]  # Extract frame from array
             im = ax.imshow(frame, cmap='afmhot', vmin=vmin, vmax=vmax)
-            cset = ax.contour(frame, cmap='Set1_r', linewidths=2, levels = levels_1)
-            ax.clabel(cset, inline=False, fmt='%1.2f', fontsize=6, colors='k')
             ax.set_axis_off()
             ax.set_title(f"Frame {i}", size=10)
         
@@ -397,11 +431,11 @@ for modeldir in dataset_generator.modeldirs:
 
 common_string = '.npy'
 
-np.save(os.path.join("10video_1well_2", 'X_train' + common_string), U_train)
-np.save(os.path.join("10video_1well_2", 'Y_train' + common_string),s_train)
-np.save(os.path.join("10video_1well_2", 'X_test' + common_string), U_test)
-np.save(os.path.join("10video_1well_2", 'Y_test' + common_string), s_test)
+np.save(os.path.join("10video_1well_5000", 'X_train' + common_string), U_train)
+np.save(os.path.join("10video_1well_5000", 'Y_train' + common_string),s_train)
+np.save(os.path.join("10video_1well_5000", 'X_test' + common_string), U_test)
+np.save(os.path.join("10video_1well_5000", 'Y_test' + common_string), s_test)
 
-np.save(os.path.join("10video_1well_2", 'timeseq_train' + common_string), Y_train)
-np.save(os.path.join("10video_1well_2", 'timeseq_test' + common_string), Y_test)
+np.save(os.path.join("10video_1well_5000", 'timeseq_train' + common_string), Y_train)
+np.save(os.path.join("10video_1well_5000", 'timeseq_test' + common_string), Y_test)
 
